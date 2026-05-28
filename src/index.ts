@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { config } from 'dotenv';
+import https from 'https';
+import { URL } from 'url';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -10,7 +12,55 @@ import {
   ErrorCode
 } from "@modelcontextprotocol/sdk/types.js";
 import { ADTClient, session_types } from "abap-adt-api";
+/** BearerFetcher is not yet re-exported from abap-adt-api main index */
+type BearerFetcher = () => Promise<string>;
 import path from 'path';
+
+/**
+ * Creates a BearerFetcher for OAuth 2.0 client_credentials flow.
+ * Used for SAP BTP / Public Cloud where basic auth is not available.
+ */
+function createOAuthFetcher(tokenUrl: string, clientId: string, clientSecret: string): BearerFetcher {
+  return async () => {
+    return new Promise<string>((resolve, reject) => {
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+      const body = 'grant_type=client_credentials';
+      const url = new URL(tokenUrl);
+      const options: https.RequestOptions = {
+        hostname: url.hostname,
+        port: url.port ? parseInt(url.port, 10) : 443,
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${credentials}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': Buffer.byteLength(body)
+        }
+      };
+
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk: string) => { data += chunk; });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data) as { access_token?: string };
+            if (parsed.access_token) {
+              resolve(parsed.access_token);
+            } else {
+              reject(new Error(`OAuth: no access_token in response: ${data}`));
+            }
+          } catch {
+            reject(new Error(`OAuth: failed to parse token response: ${data}`));
+          }
+        });
+      });
+
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+  };
+}
 import { AuthHandlers } from './handlers/AuthHandlers.js';
 import { TransportHandlers } from './handlers/TransportHandlers.js';
 import { ObjectHandlers } from './handlers/ObjectHandlers.js';
@@ -36,6 +86,7 @@ import { AtcHandlers } from './handlers/AtcHandlers.js';
 import { TraceHandlers } from './handlers/TraceHandlers.js';
 import { RefactorHandlers } from './handlers/RefactorHandlers.js';
 import { RevisionHandlers } from './handlers/RevisionHandlers.js';
+import { RapHandlers } from './handlers/RapHandlers.js';
 
 config({ path: path.resolve(__dirname, '../.env') });
 
@@ -66,6 +117,7 @@ export class AbapAdtServer extends Server {
     private traceHandlers: TraceHandlers;
     private refactorHandlers: RefactorHandlers;
     private revisionHandlers: RevisionHandlers;
+    private rapHandlers: RapHandlers;
 
     constructor() {
     super(
@@ -80,18 +132,45 @@ export class AbapAdtServer extends Server {
       }
     );
 
-    const missingVars = ['SAP_URL', 'SAP_USER', 'SAP_PASSWORD'].filter(v => !process.env[v]);
-    if (missingVars.length > 0) {
-      throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
-    }
-    
-    this.adtClient = new ADTClient(
-      process.env.SAP_URL as string,
-      process.env.SAP_USER as string,
-      process.env.SAP_PASSWORD as string,
-      process.env.SAP_CLIENT as string,
-      process.env.SAP_LANGUAGE as string
+    const isOAuth = !!(
+      process.env.SAP_OAUTH_TOKEN_URL &&
+      process.env.SAP_CLIENT_ID &&
+      process.env.SAP_CLIENT_SECRET
     );
+
+    if (isOAuth) {
+      const missingOAuth = ['SAP_URL', 'SAP_OAUTH_TOKEN_URL', 'SAP_CLIENT_ID', 'SAP_CLIENT_SECRET']
+        .filter(v => !process.env[v]);
+      if (missingOAuth.length > 0) {
+        throw new Error(`Missing OAuth environment variables: ${missingOAuth.join(', ')}`);
+      }
+      const bearerFetcher = createOAuthFetcher(
+        process.env.SAP_OAUTH_TOKEN_URL!,
+        process.env.SAP_CLIENT_ID!,
+        process.env.SAP_CLIENT_SECRET!
+      );
+      this.adtClient = new ADTClient(
+        process.env.SAP_URL!,
+        process.env.SAP_USER || process.env.SAP_CLIENT_ID!,
+        bearerFetcher,
+        '',   // client encoded in token for BTP/Public Cloud
+        process.env.SAP_LANGUAGE || 'EN'
+      );
+      console.error('MCP ABAP ADT: Using OAuth 2.0 authentication');
+    } else {
+      const missingVars = ['SAP_URL', 'SAP_USER', 'SAP_PASSWORD'].filter(v => !process.env[v]);
+      if (missingVars.length > 0) {
+        throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+      }
+      this.adtClient = new ADTClient(
+        process.env.SAP_URL!,
+        process.env.SAP_USER!,
+        process.env.SAP_PASSWORD!,
+        process.env.SAP_CLIENT,
+        process.env.SAP_LANGUAGE
+      );
+      console.error('MCP ABAP ADT: Using basic auth');
+    }
     this.adtClient.stateful = session_types.stateful
     
     // Initialize handlers
@@ -120,6 +199,7 @@ export class AbapAdtServer extends Server {
     this.traceHandlers = new TraceHandlers(this.adtClient);
     this.refactorHandlers = new RefactorHandlers(this.adtClient);
     this.revisionHandlers = new RevisionHandlers(this.adtClient);
+    this.rapHandlers = new RapHandlers(this.adtClient);
 
 
         // Setup tool handlers
@@ -127,16 +207,21 @@ export class AbapAdtServer extends Server {
   }
 
   private serializeResult(result: any) {
+    // Handlers already return MCP content format {content:[{type,text}]}.
+    // Pass them through unchanged to avoid double-wrapping.
+    if (result && Array.isArray(result.content)) {
+      return result;
+    }
     try {
       return {
         content: [{
           type: 'text',
-          text: JSON.stringify(result, (key, value) => 
+          text: JSON.stringify(result, (key, value) =>
             typeof value === 'bigint' ? value.toString() : value
           )
         }]
       };
-    } catch (error) {
+    } catch {
       return this.handleError(new McpError(
         ErrorCode.InternalError,
         'Failed to serialize result'
@@ -201,6 +286,7 @@ export class AbapAdtServer extends Server {
             ...this.traceHandlers.getTools(),
             ...this.refactorHandlers.getTools(),
             ...this.revisionHandlers.getTools(),
+            ...this.rapHandlers.getTools(),
             {
             name: 'healthcheck',
             description: 'Check server health and connectivity',
@@ -393,6 +479,10 @@ export class AbapAdtServer extends Server {
                 break;
             case 'revisions':
                 result = await this.revisionHandlers.handle(request.params.name, request.params.arguments);
+                break;
+            case 'scaffold_rap_bo':
+            case 'replace_in_object':
+                result = await this.rapHandlers.handle(request.params.name, request.params.arguments);
                 break;
             case 'healthcheck':
                 result = { status: 'healthy', timestamp: new Date().toISOString() };

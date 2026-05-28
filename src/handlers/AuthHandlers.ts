@@ -45,16 +45,22 @@ export class AuthHandlers extends BaseHandler {
     }
   }
 
-  private async handleLogin(args: any) {
+  private async handleLogin(_args: any) {
     const startTime = performance.now();
     try {
       const loginResult = await this.adtclient.login();
       this.trackRequest(startTime, true);
+      // adtclient.login() returns void/undefined in some versions; synthesise a useful response.
+      const payload = loginResult ?? {
+        status: 'ok',
+        user: this.adtclient.username,
+        loggedin: this.adtclient.loggedin
+      };
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(loginResult)
+            text: JSON.stringify(payload)
           }
         ]
       };
