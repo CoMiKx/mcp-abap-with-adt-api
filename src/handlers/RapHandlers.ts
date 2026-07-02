@@ -2,6 +2,8 @@ import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { BaseHandler } from './BaseHandler.js';
 import type { ToolDefinition } from '../types/tools.js';
 import { objectUrlFromSourceUrl } from './ObjectSourceHandlers.js';
+import { sourceCache } from '../lib/sourceCache.js';
+import { session_types } from 'abap-adt-api';
 import type { RapGeneratorId, RapGeneratorContent } from 'abap-adt-api';
 
 export class RapHandlers extends BaseHandler {
@@ -108,6 +110,8 @@ export class RapHandlers extends BaseHandler {
   }
 
   private async writeSource(objectUrl: string, sourceUrl: string, source: string, transport?: string): Promise<void> {
+    // dropSession/logout reset the client to stateless; locks require a stateful session
+    this.adtclient.stateful = session_types.stateful;
     const lock = await this.adtclient.lock(objectUrl);
     try {
       await this.adtclient.setObjectSource(sourceUrl, source, lock.LOCK_HANDLE, transport);
@@ -277,6 +281,7 @@ export class RapHandlers extends BaseHandler {
       if (crlf) updated = updated.replace(/\n/g, '\r\n');
 
       await this.writeSource(objectUrl, args.objectSourceUrl, updated, args.transport);
+      sourceCache.set(args.objectSourceUrl, updated);
 
       this.trackRequest(startTime, true);
       return this.ok(

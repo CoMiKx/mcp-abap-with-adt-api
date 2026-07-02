@@ -2,6 +2,7 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { BaseHandler } from './BaseHandler.js';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient } from 'abap-adt-api';
+import { sourceCache } from '../lib/sourceCache.js';
 
 const SOURCE_OBJECT = /\/sap\/bc\/adt\/(programs\/(programs|includes)|oo\/(classes|interfaces)|functions\/groups\/[^/]+\/(fmodules|includes))\/[^/?#]+$/i;
 
@@ -20,7 +21,8 @@ export class CodeAnalysisHandlers extends BaseHandler {
                 description: 'Perform ABAP syntax check of source code without saving it. ' +
                     'url is the source being checked (e.g. /sap/bc/adt/programs/includes/zfoo_f01/source/main); ' +
                     'object URLs without /source/main are completed automatically. ' +
-                    'mainUrl defaults to url; set mainUrl to the main program source only when checking an include in its context.',
+                    'mainUrl defaults to url; set mainUrl to the main program source only when checking an include in its context. ' +
+                    'code may be omitted to check the source last read or written for url in this session (getObjectSource, setObjectSource, setObjectSourceFromFile, replace_in_object).',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -30,7 +32,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
                         mainProgram: { type: 'string', optional: true },
                         version: { type: 'string', optional: true }
                     },
-                    required: ['code', 'url']
+                    required: ['url']
                 }
             },
             {
@@ -269,7 +271,14 @@ export class CodeAnalysisHandlers extends BaseHandler {
             // "URI-Mapping cannot be performed due to invalid URI"
             const url = toSourceUrl(args.url);
             const mainUrl = args.mainUrl ? toSourceUrl(args.mainUrl) : url;
-            const result = await this.adtclient.syntaxCheck(url, mainUrl, args.code, args.mainProgram, args.version);
+            const code = args.code || sourceCache.get(url);
+            if (!code) {
+                throw new McpError(
+                    ErrorCode.InvalidParams,
+                    `No source provided and none cached for '${url}'. Pass "code", or read the source with getObjectSource first.`
+                );
+            }
+            const result = await this.adtclient.syntaxCheck(url, mainUrl, code, args.mainProgram, args.version);
             this.trackRequest(startTime, true);
             return {
                 content: [

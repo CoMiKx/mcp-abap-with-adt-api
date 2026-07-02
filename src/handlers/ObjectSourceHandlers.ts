@@ -4,6 +4,7 @@ import path from 'path';
 import { BaseHandler } from './BaseHandler';
 import type { ToolDefinition } from '../types/tools';
 import { session_types } from "abap-adt-api";
+import { sourceCache } from '../lib/sourceCache';
 
 /**
  * Object URL to lock for a source URL:
@@ -105,6 +106,8 @@ export class ObjectSourceHandlers extends BaseHandler {
     const startTime = performance.now();
     try {
       const source = await this.adtclient.getObjectSource(args.objectSourceUrl, args.options);
+      // Remember the source so a later syntaxCheckCode on the same URL can reuse it
+      sourceCache.set(args.objectSourceUrl, source);
       const lines = source.split(/\r?\n/);
       let result: Record<string, unknown>;
       if (args.outputFile) {
@@ -156,6 +159,7 @@ export class ObjectSourceHandlers extends BaseHandler {
         args.lockHandle,
         args.transport
       );
+      sourceCache.set(args.objectSourceUrl, args.source);
       this.trackRequest(startTime, true);
       return {
         content: [
@@ -185,9 +189,12 @@ export class ObjectSourceHandlers extends BaseHandler {
       if (!source.trim()) {
         throw new Error(`File is empty: ${args.filePath}`);
       }
+      // dropSession/logout reset the client to stateless; locks require a stateful session
+      this.adtclient.stateful = session_types.stateful;
       const lock = await this.adtclient.lock(objectUrl);
       try {
         await this.adtclient.setObjectSource(args.objectSourceUrl, source, lock.LOCK_HANDLE, args.transport);
+        sourceCache.set(args.objectSourceUrl, source);
       } finally {
         await this.adtclient.unLock(objectUrl, lock.LOCK_HANDLE).catch(() => undefined);
       }
