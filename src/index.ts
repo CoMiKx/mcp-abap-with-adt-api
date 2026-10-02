@@ -17,6 +17,35 @@ type BearerFetcher = () => Promise<string>;
 import path from 'path';
 
 /**
+ * Tools that change the SAP system. Blocked unless SAP_ALLOW_WRITE=true.
+ */
+const WRITE_TOOLS = new Set([
+  // objects & source
+  'lock', 'setObjectSource', 'createObject', 'deleteObject', 'createTestInclude',
+  'activateObjects', 'activateByName',
+  // refactoring
+  'renameExecute', 'extractMethodExecute',
+  // RAP
+  'scaffold_rap_bo', 'replace_in_object',
+  // transports
+  'createTransport', 'transportDelete', 'transportRelease', 'transportSetOwner',
+  'transportAddUser', 'setTransportsConfig', 'createTransportsConfig',
+  // service bindings
+  'publishServiceBinding', 'unPublishServiceBinding',
+  // abapGit
+  'gitCreateRepo', 'gitPullRepo', 'gitUnlinkRepo', 'pushRepo', 'switchRepoBranch',
+  // ATC
+  'atcChangeContact', 'atcRequestExemption',
+  // traces & debugger
+  'tracesCreateConfiguration', 'tracesDelete', 'tracesDeleteConfiguration', 'tracesSetParameters',
+  'debuggerSetVariableValue', 'debuggerSaveSettings',
+  // settings & code execution
+  'setPrettyPrinterSetting', 'runClass'
+]);
+
+const isWriteAllowed = () => (process.env.SAP_ALLOW_WRITE || '').toLowerCase() === 'true';
+
+/**
  * Creates a BearerFetcher for OAuth 2.0 client_credentials flow.
  * Used for SAP BTP / Public Cloud where basic auth is not available.
  */
@@ -62,6 +91,7 @@ function createOAuthFetcher(tokenUrl: string, clientId: string, clientSecret: st
   };
 }
 import { AuthHandlers } from './handlers/AuthHandlers.js';
+import { BrowserLoginHttpClient } from './lib/browserAuth.js';
 import { TransportHandlers } from './handlers/TransportHandlers.js';
 import { ObjectHandlers } from './handlers/ObjectHandlers.js';
 import { ClassHandlers } from './handlers/ClassHandlers.js';
@@ -138,7 +168,21 @@ export class AbapAdtServer extends Server {
       process.env.SAP_CLIENT_SECRET
     );
 
-    if (isOAuth) {
+    const isBrowserLogin = (process.env.SAP_AUTH_TYPE || '').toLowerCase() === 'browser';
+
+    if (isBrowserLogin) {
+      if (!process.env.SAP_URL) {
+        throw new Error('Missing required environment variable: SAP_URL');
+      }
+      this.adtClient = new ADTClient(
+        new BrowserLoginHttpClient(process.env.SAP_URL),
+        process.env.SAP_USER || 'browser-login',
+        '',
+        '',   // client is fixed per tenant in Public Cloud
+        process.env.SAP_LANGUAGE || 'EN'
+      );
+      console.error('MCP ABAP ADT: Using browser login (reentrance ticket)');
+    } else if (isOAuth) {
       const missingOAuth = ['SAP_URL', 'SAP_OAUTH_TOKEN_URL', 'SAP_CLIENT_ID', 'SAP_CLIENT_SECRET']
         .filter(v => !process.env[v]);
       if (missingOAuth.length > 0) {
@@ -171,6 +215,7 @@ export class AbapAdtServer extends Server {
       );
       console.error('MCP ABAP ADT: Using basic auth');
     }
+    console.error(`MCP ABAP ADT: Write operations ${isWriteAllowed() ? 'ENABLED' : 'disabled (read-only)'}`);
     this.adtClient.stateful = session_types.stateful
     
     // Initialize handlers
@@ -302,7 +347,15 @@ export class AbapAdtServer extends Server {
     this.setRequestHandler(CallToolRequestSchema, async (request) => {
       try {
         let result: any;
-        
+
+        if (WRITE_TOOLS.has(request.params.name) && !isWriteAllowed()) {
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `'${request.params.name}' changes the SAP system and write operations are disabled (SAP_ALLOW_WRITE is not 'true'). ` +
+            `Set SAP_ALLOW_WRITE=true in the MCP server config to allow it.`
+          );
+        }
+
         switch (request.params.name) {
             case 'login':
             case 'logout':

@@ -106,6 +106,31 @@ Once the server is running, you can interact with it using MCP clients or tools 
 
 ```
 
+### Browser login (S/4HANA Cloud Public Edition / GROW)
+
+Public Cloud tenants log users in with email and password through SAP Cloud Identity, so basic auth does not work. Set `SAP_AUTH_TYPE=browser` instead:
+
+```json
+"abap-grow": {
+  "command": "node",
+  "args": ["PATH_TO_YOUR/mcp-abap-abap-adt-api/dist/index.js"],
+  "env": {
+    "SAP_AUTH_TYPE": "browser",
+    "SAP_URL": "https://myXXXXXX.s4hana.cloud.sap",
+    "SAP_LANGUAGE": "EN",
+    "SAP_ALLOW_WRITE": "false"
+  }
+}
+```
+
+On the first tool call the server opens your browser at the tenant's login page (the same reentrance-ticket flow Eclipse ADT uses). After you sign in, the browser shows "SAP login successful" and the tool call continues. If the session expires, the browser opens again. No password is stored. The login URL is also printed to stderr in case the browser does not open.
+
+Your user needs the business role `SAP_BR_DEVELOPER`, and ADT is only available in the development tenant.
+
+### Write protection
+
+Tools that change the system (saving source, creating/deleting/activating objects, transports, service binding publish, abapGit pull/push, `runClass`, etc.) are blocked unless `SAP_ALLOW_WRITE=true`. Read, search, syntax check, ATC and unit tests always work. The server logs the active mode on startup.
+
 ## Custom Instruction
 Use this Custom Instruction to explain the tool to your model:
 ```

@@ -3,6 +3,7 @@
     "@modelcontextprotocol/sdk": "^1.4.1",
     "@types/node": "^22.10.10",
     "abap-adt-api": "^8.4.0",
+    "axios": "^1.16.1",
     "dotenv": "^16.4.7",
     "typescript": "^5.7.3"
   },
