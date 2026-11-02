@@ -36,7 +36,9 @@ export class QueryHandlers extends BaseHandler {
             },
             {
                 name: 'runQuery',
-                description: 'Runs a SQL query on the target system.',
+                description: 'Runs an ABAP SQL SELECT through the ADT data preview (like Eclipse Data Preview). ' +
+                    'Errors include SAP\'s own message. If a complex query fails (IN lists, ORDER BY, LIKE combinations), split it into simpler queries. ' +
+                    'On older systems (e.g. ECC) an empty result does not prove that no rows exist.',
                 inputSchema: {
                     type: 'object',
                     properties: {

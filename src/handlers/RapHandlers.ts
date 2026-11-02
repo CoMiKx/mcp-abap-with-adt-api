@@ -1,6 +1,7 @@
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { BaseHandler } from './BaseHandler.js';
 import type { ToolDefinition } from '../types/tools.js';
+import { objectUrlFromSourceUrl } from './ObjectSourceHandlers.js';
 import type { RapGeneratorId, RapGeneratorContent } from 'abap-adt-api';
 
 export class RapHandlers extends BaseHandler {
@@ -50,8 +51,9 @@ export class RapHandlers extends BaseHandler {
       {
         name: 'replace_in_object',
         description:
-          'Find-and-replace specific text inside an existing ABAP object source. ' +
-          'Safer than setObjectSource for small targeted fixes — only touches the matched text.',
+          'Find-and-replace text inside an existing ABAP object source (locks, saves and unlocks itself). ' +
+          'Multi-line find text works (line endings are normalized). If the text occurs more than once the call ' +
+          'aborts and lists the matching lines, unless occurrence or replaceAll is given. Does not activate.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -61,22 +63,30 @@ export class RapHandlers extends BaseHandler {
             },
             objectUrl: {
               type: 'string',
-              description: 'ADT object URL for locking, e.g. /sap/bc/adt/programs/programs/zfoo'
+              description: 'ADT object URL for locking; derived from objectSourceUrl if omitted'
             },
             find: {
               type: 'string',
-              description: 'Exact text to find'
+              description: 'Exact text to find (may span several lines)'
             },
             replace_with: {
               type: 'string',
-              description: 'Replacement text'
+              description: 'Replacement text (empty string deletes the found text)'
+            },
+            occurrence: {
+              type: 'number',
+              description: 'Replace only the Nth match (1-based)'
+            },
+            replaceAll: {
+              type: 'boolean',
+              description: 'Replace every match (default false)'
             },
             transport: {
               type: 'string',
-              description: 'TR number'
+              description: 'TR number (not needed for local objects)'
             }
           },
-          required: ['objectSourceUrl', 'objectUrl', 'find', 'replace_with', 'transport']
+          required: ['objectSourceUrl', 'find', 'replace_with']
         }
       }
     ];
@@ -97,12 +107,12 @@ export class RapHandlers extends BaseHandler {
     return { content: [{ type: 'text', text }] };
   }
 
-  private async writeSource(objectUrl: string, sourceUrl: string, source: string, transport: string): Promise<void> {
+  private async writeSource(objectUrl: string, sourceUrl: string, source: string, transport?: string): Promise<void> {
     const lock = await this.adtclient.lock(objectUrl);
     try {
       await this.adtclient.setObjectSource(sourceUrl, source, lock.LOCK_HANDLE, transport);
     } finally {
-      await this.adtclient.unLock(objectUrl, lock.LOCK_HANDLE);
+      await this.adtclient.unLock(objectUrl, lock.LOCK_HANDLE).catch(() => undefined);
     }
   }
 
@@ -227,21 +237,51 @@ export class RapHandlers extends BaseHandler {
   async handleReplaceInObject(args: any): Promise<any> {
     const startTime = performance.now();
     try {
+      const objectUrl = args.objectUrl || objectUrlFromSourceUrl(args.objectSourceUrl);
       const original = await this.adtclient.getObjectSource(args.objectSourceUrl);
-      const src = typeof original === 'string' ? original : (original as any).source || '';
+      const raw = typeof original === 'string' ? original : (original as any).source || '';
+      // SAP returns CRLF; tool arguments only carry LF. Match on LF and restore CRLF on write.
+      const crlf = raw.includes('\r\n');
+      const src = raw.replace(/\r\n/g, '\n');
+      const find = String(args.find).replace(/\r\n/g, '\n');
+      const replacement = String(args.replace_with ?? '').replace(/\r\n/g, '\n');
 
-      if (!src.includes(args.find)) {
-        return this.ok(`Text not found in object. Aborting.\nSearched for: ${args.find}`);
+      if (!find) {
+        return this.ok('find must not be empty. Aborting.');
+      }
+      const positions: number[] = [];
+      for (let i = src.indexOf(find); i !== -1; i = src.indexOf(find, i + find.length)) {
+        positions.push(i);
+      }
+      if (!positions.length) {
+        return this.ok(`Text not found in object. Nothing changed.\nSearched for: ${args.find}`);
+      }
+      const lineOf = (pos: number) => src.slice(0, pos).split('\n').length;
+
+      let targets = positions;
+      if (args.occurrence) {
+        if (args.occurrence < 1 || args.occurrence > positions.length) {
+          return this.ok(`occurrence ${args.occurrence} is out of range: the text occurs ${positions.length} time(s) ` +
+            `(lines ${positions.map(lineOf).join(', ')}). Nothing changed.`);
+        }
+        targets = [positions[args.occurrence - 1]];
+      } else if (positions.length > 1 && !args.replaceAll) {
+        return this.ok(`The text occurs ${positions.length} times (lines ${positions.map(lineOf).join(', ')}). Nothing changed.\n` +
+          'Pass occurrence=<n> to replace one match, replaceAll=true to replace all, or make find longer so it is unique.');
       }
 
-      const occurrences = src.split(args.find).length - 1;
-      const updated = src.split(args.find).join(args.replace_with);
+      let updated = src;
+      for (const pos of [...targets].reverse()) {
+        updated = updated.slice(0, pos) + replacement + updated.slice(pos + find.length);
+      }
+      if (crlf) updated = updated.replace(/\n/g, '\r\n');
 
-      await this.writeSource(args.objectUrl, args.objectSourceUrl, updated, args.transport);
+      await this.writeSource(objectUrl, args.objectSourceUrl, updated, args.transport);
 
       this.trackRequest(startTime, true);
       return this.ok(
-        `✓ Replaced ${occurrences} occurrence(s).\nFind:    ${args.find}\nReplace: ${args.replace_with}`
+        `✓ Replaced ${targets.length} of ${positions.length} occurrence(s) at line(s) ${targets.map(lineOf).join(', ')}. ` +
+        'Not activated yet; call activateByName.'
       );
     } catch (error: any) {
       this.trackRequest(startTime, false);

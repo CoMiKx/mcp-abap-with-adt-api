@@ -21,7 +21,7 @@ import path from 'path';
  */
 const WRITE_TOOLS = new Set([
   // objects & source
-  'lock', 'setObjectSource', 'createObject', 'deleteObject', 'createTestInclude',
+  'lock', 'setObjectSource', 'setObjectSourceFromFile', 'createObject', 'deleteObject', 'createTestInclude',
   'activateObjects', 'activateByName',
   // refactoring
   'renameExecute', 'extractMethodExecute',
@@ -92,6 +92,7 @@ function createOAuthFetcher(tokenUrl: string, clientId: string, clientSecret: st
 }
 import { AuthHandlers } from './handlers/AuthHandlers.js';
 import { BrowserLoginHttpClient } from './lib/browserAuth.js';
+import { enableSessionRecovery } from './lib/sessionRecovery.js';
 import { TransportHandlers } from './handlers/TransportHandlers.js';
 import { ObjectHandlers } from './handlers/ObjectHandlers.js';
 import { ClassHandlers } from './handlers/ClassHandlers.js';
@@ -217,6 +218,7 @@ export class AbapAdtServer extends Server {
     }
     console.error(`MCP ABAP ADT: Write operations ${isWriteAllowed() ? 'ENABLED' : 'disabled (read-only)'}`);
     this.adtClient.stateful = session_types.stateful
+    enableSessionRecovery(this.adtClient, isBrowserLogin);
     
     // Initialize handlers
     this.authHandlers = new AuthHandlers(this.adtClient);
@@ -294,7 +296,7 @@ export class AbapAdtServer extends Server {
       content: [{
         type: 'text',
         text: JSON.stringify({
-          error: 'Internal server error',
+          error: (error as Error).message || 'Internal server error',
           code: ErrorCode.InternalError
         })
       }],
@@ -412,6 +414,8 @@ export class AbapAdtServer extends Server {
                 break;
             case 'getObjectSource':
             case 'setObjectSource':
+            case 'setObjectSourceFromFile':
+            case 'getMessageClass':
                 result = await this.objectSourceHandlers.handle(request.params.name, request.params.arguments);
                 break;
             case 'deleteObject':
@@ -506,6 +510,7 @@ export class AbapAdtServer extends Server {
             case 'atcCheckVariant':
             case 'createAtcRun':
             case 'atcWorklists':
+            case 'atcFindingDocumentation':
             case 'atcUsers':
             case 'atcExemptProposal':
             case 'atcRequestExemption':

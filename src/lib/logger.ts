@@ -23,22 +23,8 @@ function log(level: LogLevel, name: string, message: string, meta?: Record<strin
     ...meta
   };
   
-  const logString = JSON.stringify(logEntry, null, 2);
-  
-  switch (level) {
-    case 'error':
-      console.error(logString);
-      break;
-    case 'warn':
-      console.warn(logString);
-      break;
-    case 'info':
-      console.info(logString);
-      break;
-    case 'debug':
-      console.debug(logString);
-      break;
-  }
+  // stdout carries the MCP JSON-RPC stream, so every log line must go to stderr
+  console.error(JSON.stringify(logEntry));
 }
 
 export type Logger = ReturnType<typeof createLogger>;

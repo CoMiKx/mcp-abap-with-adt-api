@@ -3,12 +3,24 @@ import { BaseHandler } from './BaseHandler.js';
 import type { ToolDefinition } from '../types/tools.js';
 import { ADTClient } from 'abap-adt-api';
 
+const SOURCE_OBJECT = /\/sap\/bc\/adt\/(programs\/(programs|includes)|oo\/(classes|interfaces)|functions\/groups\/[^/]+\/(fmodules|includes))\/[^/?#]+$/i;
+
+/** Program, include, class, interface and function module URLs need the /source/main suffix. */
+function toSourceUrl(url: string): string {
+    if (!url) throw new Error('url is required');
+    const clean = url.replace(/\/$/, '');
+    return SOURCE_OBJECT.test(clean) ? `${clean}/source/main` : clean;
+}
+
 export class CodeAnalysisHandlers extends BaseHandler {
     getTools(): ToolDefinition[] {
         return [
             {
                 name: 'syntaxCheckCode',
-                description: 'Perform ABAP syntax check with source code',
+                description: 'Perform ABAP syntax check of source code without saving it. ' +
+                    'url is the source being checked (e.g. /sap/bc/adt/programs/includes/zfoo_f01/source/main); ' +
+                    'object URLs without /source/main are completed automatically. ' +
+                    'mainUrl defaults to url; set mainUrl to the main program source only when checking an include in its context.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -18,7 +30,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
                         mainProgram: { type: 'string', optional: true },
                         version: { type: 'string', optional: true }
                     },
-                    required: ['code']
+                    required: ['code', 'url']
                 }
             },
             {
@@ -253,7 +265,11 @@ export class CodeAnalysisHandlers extends BaseHandler {
     async handleSyntaxCheckCode(args: any): Promise<any> {
         const startTime = performance.now();
         try {
-            const result = await this.adtclient.syntaxCheck(args.url, args?.mainUrl, args?.code, args?.mainProgram, args?.version);
+            // ADT maps these URIs to objects; object URLs without /source/main fail with
+            // "URI-Mapping cannot be performed due to invalid URI"
+            const url = toSourceUrl(args.url);
+            const mainUrl = args.mainUrl ? toSourceUrl(args.mainUrl) : url;
+            const result = await this.adtclient.syntaxCheck(url, mainUrl, args.code, args.mainProgram, args.version);
             this.trackRequest(startTime, true);
             return {
                 content: [
