@@ -21,7 +21,8 @@ export class CodeAnalysisHandlers extends BaseHandler {
                 description: 'Perform ABAP syntax check of source code without saving it. ' +
                     'url is the source being checked (e.g. /sap/bc/adt/programs/includes/zfoo_f01/source/main); ' +
                     'object URLs without /source/main are completed automatically. ' +
-                    'mainUrl defaults to url; set mainUrl to the main program source only when checking an include in its context. ' +
+                    'For includes, the main program is looked up automatically (pass mainProgram, e.g. /sap/bc/adt/programs/programs/zfoo, to choose one); ' +
+                    'an include checked without its main program reports no errors even when the code is broken. mainUrl defaults to url and rarely needs to be set. ' +
                     'code may be omitted to check the source last read or written for url in this session (getObjectSource, setObjectSource, setObjectSourceFromFile, replace_in_object).',
                 inputSchema: {
                     type: 'object',
@@ -278,7 +279,17 @@ export class CodeAnalysisHandlers extends BaseHandler {
                     `No source provided and none cached for '${url}'. Pass "code", or read the source with getObjectSource first.`
                 );
             }
-            const result = await this.adtclient.syntaxCheck(url, mainUrl, code, args.mainProgram, args.version);
+            let mainProgram: string | undefined = args.mainProgram;
+            let note: string | undefined;
+            if (!mainProgram && /\/programs\/includes\//i.test(url)) {
+                const mains = await this.adtclient.mainPrograms(url.replace(/\/source\/main$/, '')).catch(() => []);
+                mainProgram = mains[0]?.['adtcore:uri'];
+                note = mainProgram
+                    ? `Checked in the context of main program ${mains[0]['adtcore:name']}` +
+                      (mains.length > 1 ? ` (${mains.length} main programs found; pass mainProgram to choose another)` : '')
+                    : 'No main program found: the include was checked on its own, so errors may be missed.';
+            }
+            const result = await this.adtclient.syntaxCheck(url, mainUrl, code, mainProgram, args.version);
             this.trackRequest(startTime, true);
             return {
                 content: [
@@ -286,6 +297,7 @@ export class CodeAnalysisHandlers extends BaseHandler {
                         type: 'text',
                         text: JSON.stringify({
                             status: 'success',
+                            ...(note ? { note } : {}),
                             result
                         })
                     }
