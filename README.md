@@ -19,6 +19,73 @@ The MCP-Server `mcp-abap-abap-adt-api` is a Model Context Protocol (MCP) server 
 
 ## Installation
 
+### Quick setup with Claude Code (new Mac or Windows machine)
+
+A clone contains the code only. The build (`dist/`), the packages (`node_modules/`) and your SAP logins (`.env`, `.mcp.json`) are not in the repository and are set up on each machine.
+
+1. **Install** [Node.js LTS](https://nodejs.org) and [Git](https://git-scm.com).
+
+2. **Clone, install and build**
+
+   ```bash
+   git clone https://github.com/CoMiKx/mcp-abap-with-adt-api.git
+   cd mcp-abap-with-adt-api
+   npm install
+   npm run build
+   ```
+
+3. **Add a `.mcp.json` to each project folder** you open in Claude Code. The path must point to `dist/index.js` of your clone.
+
+   On-premise / private cloud (user and password):
+
+   ```json
+   {
+     "mcpServers": {
+       "abap-dev": {
+         "command": "node",
+         "args": ["/Users/<you>/path/to/mcp-abap-with-adt-api/dist/index.js"],
+         "env": {
+           "SAP_URL": "https://your-sap-host:44300",
+           "SAP_USER": "YOUR_USER",
+           "SAP_PASSWORD": "YOUR_PASSWORD",
+           "SAP_CLIENT": "100",
+           "SAP_LANGUAGE": "EN",
+           "NODE_TLS_REJECT_UNAUTHORIZED": "0",
+           "SAP_ALLOW_WRITE": "false"
+         }
+       }
+     }
+   }
+   ```
+
+   S/4HANA Cloud Public Edition (GROW), browser login with no password stored (see [Browser login](#browser-login-s4hana-cloud-public-edition--grow)):
+
+   ```json
+   "env": {
+     "SAP_AUTH_TYPE": "browser",
+     "SAP_URL": "https://myXXXXXX.s4hana.cloud.sap",
+     "SAP_LANGUAGE": "EN",
+     "SAP_ALLOW_WRITE": "false"
+   }
+   ```
+
+   - **Windows paths** need double backslashes: `"C:\\Users\\<you>\\mcp-abap-with-adt-api\\dist\\index.js"`. If `node` is not found, set `"command"` to the full path, e.g. `"C:\\Program Files\\nodejs\\node.exe"` (Windows) or `"/usr/local/bin/node"` (Mac).
+   - **Always set `SAP_ALLOW_WRITE`.** Write tools are blocked unless it is `"true"`; use `"true"` only on development systems.
+   - **`.mcp.json` holds passwords.** Keep it out of git (add it to the project's `.gitignore`) and out of shared folders.
+   - `NODE_TLS_REJECT_UNAUTHORIZED` is only needed for self-signed certificates.
+
+4. **Open Claude Code in the project folder** and approve the server when asked.
+
+**Updating later:**
+
+```bash
+git pull
+npm install
+npm run build
+```
+
+Then restart Claude Code.
+
 ### Installing via Smithery
 
 To install ABAP-ADT-API MCP-Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@mario-andreschak/mcp-abap-abap-adt-api):
@@ -37,8 +104,8 @@ npx -y @smithery/cli install @mario-andreschak/mcp-abap-abap-adt-api --client cl
 1. **Clone the Repository**
 
    ```cmd
-   git clone https://github.com/mario-andreschak/mcp-abap-abap-adt-api.git
-   cd mcp-abap-abap-adt-api
+   git clone https://github.com/CoMiKx/mcp-abap-with-adt-api.git
+   cd mcp-abap-with-adt-api
    ```
 
 2. **Install Dependencies**
